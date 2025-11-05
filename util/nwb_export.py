@@ -30,6 +30,9 @@ def export_subject(key):
     mouse_ID = f"M{mouse_info['mouse_id']:03d}"
     session_date = (exp.JoystickExperiment & key).fetch1("day")
     age = session_date - mouse_info["dob"]
+    stroke_group = (exp.StrokeGroup.proj(stroke_group='group') & key).fetch1("stroke_group")
+    if stroke_group == "Rehab":
+        stroke_group = "Stroke + training"
 
     subject = Subject(
         subject_id = mouse_ID,
@@ -38,6 +41,7 @@ def export_subject(key):
         species = "Mus musculus",
         sex = mouse_info["sex"],
         genotype = "C57BL/6J-Tg(Thy1-GCaMP6f)GP5.17Dkim/J +/-",
+        description = f"Mouse {mouse_ID}, {age.days} days old, experimental group: {stroke_group}"
     )
     return subject
 
@@ -85,6 +89,8 @@ def export_limb_DLC(key, side):
         "3_tip": "Tracked fingertip coordinates (x, y, p) of 3rd finger from DeepLabCut",
         "4_tip": "Tracked fingertip coordinates (x, y, p) of 4th finger from DeepLabCut",
     }
+    t0 = timestamps[0]
+    frame_rate = 1 / np.mean(np.diff(timestamps))
 
     for label_key in label_keys:
         x, y, p = (pt.DeepLabCut.Label & label_key).fetch1('x', 'y', 'p')
@@ -94,7 +100,9 @@ def export_limb_DLC(key, side):
             name = label_key['label'],
             description = label_name_map[label_key['label']],
             data = coords,
-            timestamps = timestamps,
+            # timestamps = timestamps,
+            starting_time = t0,
+            rate = frame_rate,
             unit = "pixels",
         )
     return behavioral_timeseries
@@ -158,6 +166,9 @@ def export_limb_features(key, side):
     behavioral_timeseries = BehavioralTimeSeries(
         name = "TaskLimbFeatures" if side=='ipsi' else "SupportLimbFeatures",
     )
+
+    t0 = timestamps[0]
+    frame_rate = 1 / np.mean(np.diff(timestamps))
     for i, feature_name in enumerate(names):
         data = feature_matrix[:, i]
         # add data to BehavioralTimeSeries
@@ -165,7 +176,9 @@ def export_limb_features(key, side):
             name = features_to_name[feature_name],
             description = feature_descriptions[feature_name],
             data = data,
-            timestamps = timestamps,
+            # timestamps = timestamps,
+            starting_time = t0,
+            rate = frame_rate,
             unit = feature_units[feature_name],
         )
     return behavioral_timeseries
@@ -183,8 +196,8 @@ def export_trials(key, nwbfile):
         nwbfile.add_trial(
             start_time = trial['t_start'],
             stop_time = trial['t_end'],
-            successful = trial['successful'],
-            autoreward = trial['autoreward'],
+            successful = trial['successful'] == 1,
+            autoreward = trial['autoreward'] == 1,
             t_servo_in = trial['t_servo_in'],
             t_cue = trial['t_cue'],
             t_servo_out = trial['t_servo_out'],
@@ -293,6 +306,8 @@ def export_widefield_imaging(key, nwbfile):
             roi_ids_new.append(roi_id)
 
     timestamps = (wf.Synchronisation & key).fetch1("frame_timestamps_blue")
+    t0 = timestamps[0]
+    frame_rate = 1 / np.mean(np.diff(timestamps))
     # add each ROI as a normal timeseries
     for i, roi_id in enumerate(roi_ids_new):
         roi_dff = roi_dff_matrix[:, i]
@@ -300,7 +315,9 @@ def export_widefield_imaging(key, nwbfile):
             name = f"{roi_id}",
             data = roi_dff,
             unit = "dF/F",
-            timestamps = timestamps,
+            # timestamps = timestamps,
+            starting_time = t0,
+            rate = frame_rate,
             description = f"Hemodynamics-corrected dFF signal of ROI {roi_id}",
         )
         ophys_module.add_data_interface(timeseries)
@@ -377,8 +394,10 @@ if __name__ == "__main__":
         nwbfile = export_widefield_imaging(key, nwbfile)
 
         # create output file path
-        filename = f"M{key['mouse_id']:03d}_D{key['day'].strftime('%Y%m%d')}_nwb_export.nwb"
-        output_path = output_dir / filename
+        mouse_dir = output_dir / f"M{key['mouse_id']:03d}"
+        mouse_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"M{key['mouse_id']:03d}_{key['day'].strftime('%Y-%m-%d')}_nwb_export.nwb"
+        output_path = mouse_dir / filename
         # write NWB file
         with NWBHDF5IO(output_path, 'w') as io:
             io.write(nwbfile)
